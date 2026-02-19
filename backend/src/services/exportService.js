@@ -1,7 +1,10 @@
 const PDFDocument = require('pdfkit');
+const axios = require('axios');
 const Analysis = require('../models/Analysis');
 const Meeting = require('../models/Meeting');
 const ApiError = require('../utils/apiError');
+const { env } = require('../config/env');
+const logger = require('../utils/logger');
 
 class ExportService {
   async exportJSON(meetingId, userId) {
@@ -150,6 +153,199 @@ class ExportService {
         reject(error);
       }
     });
+  }
+
+  /**
+   * Export action items to Trello board
+   * Requires TRELLO_API_KEY and TRELLO_API_TOKEN
+   * boardId: Target Trello board ID
+   * listId: Target list ID (optional, uses default if not provided)
+   */
+  async exportToTrello(meetingId, userId, { boardId, listId } = {}) {
+    if (!env.TRELLO_API_KEY || !env.TRELLO_API_TOKEN) {
+      throw ApiError.badRequest('Trello API credentials not configured. Please set TRELLO_API_KEY and TRELLO_API_TOKEN in environment variables.');
+    }
+
+    const meeting = await Meeting.findOne({ _id: meetingId, userId });
+    if (!meeting) {
+      throw ApiError.notFound('Meeting not found');
+    }
+
+    const analysis = await Analysis.findOne({ meetingId }).sort({ version: -1 });
+    if (!analysis || !analysis.actionItems.length) {
+      throw ApiError.badRequest('No action items found to export');
+    }
+
+    try {
+      const baseUrl = 'https://api.trello.com/1';
+      const auth = `?key=${env.TRELLO_API_KEY}&token=${env.TRELLO_API_TOKEN}`;
+
+      // If no listId provided, use the first list of the board
+      let targetListId = listId;
+      if (!targetListId && boardId) {
+        try {
+          const listsResponse = await axios.get(`${baseUrl}/boards/${boardId}/lists${auth}`);
+          if (listsResponse.data.length > 0) {
+            targetListId = listsResponse.data[0].id;
+          }
+        } catch (error) {
+          logger.warn('Could not fetch board lists:', error.message);
+          throw ApiError.badRequest('Invalid Trello board ID or board access denied');
+        }
+      }
+
+      if (!targetListId) {
+        throw ApiError.badRequest('List ID is required or board has no lists');
+      }
+
+      // Create cards for each action item
+      const createdCards = [];
+      for (const item of analysis.actionItems) {
+        const priorityLabel = {
+          High: 'red',
+          Medium: 'yellow',
+          Low: 'green',
+        }[item.priority] || 'blue';
+
+        const cardData = {
+          name: `[${item.priority}] ${item.task}`,
+          desc: `Owner: ${item.owner}\nDeadline: ${item.deadline}\nStatus: ${item.status}\n\nFrom Meeting: ${meeting.title}`,
+          idList: targetListId,
+          labels: [priorityLabel],
+          due: item.deadline && item.deadline !== 'Not specified' ? item.deadline : null,
+        };
+
+        try {
+          const cardResponse = await axios.post(`${baseUrl}/cards${auth}`, cardData);
+          createdCards.push(cardResponse.data);
+        } catch (error) {
+          logger.error('Failed to create Trello card:', error.message);
+          throw ApiError.internal(`Failed to create card: ${error.message}`);
+        }
+      }
+
+      logger.info(`Successfully exported ${createdCards.length} cards to Trello`);
+      return {
+        success: true,
+        message: `${createdCards.length} action items exported to Trello`,
+        cardsCreated: createdCards.length,
+        boardId,
+        listId: targetListId,
+      };
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      logger.error('Trello export error:', error);
+      throw ApiError.serviceUnavailable('Failed to export to Trello: ' + error.message);
+    }
+  }
+
+  /**
+   * Export to Notion database
+   * Requires NOTION_API_KEY
+   * databaseId: Target Notion database ID
+   */
+  async exportToNotion(meetingId, userId, { databaseId } = {}) {
+    if (!env.NOTION_API_KEY) {
+      throw ApiError.badRequest('Notion API key not configured. Please set NOTION_API_KEY in environment variables.');
+    }
+
+    if (!databaseId) {
+      throw ApiError.badRequest('Notion database ID is required');
+    }
+
+    const meeting = await Meeting.findOne({ _id: meetingId, userId });
+    if (!meeting) {
+      throw ApiError.notFound('Meeting not found');
+    }
+
+    const analysis = await Analysis.findOne({ meetingId }).sort({ version: -1 });
+    if (!analysis || !analysis.actionItems.length) {
+      throw ApiError.badRequest('No action items found to export');
+    }
+
+    try {
+      const baseUrl = 'https://api.notion.com/v1';
+      const headers = {
+        'Authorization': `Bearer ${env.NOTION_API_KEY}`,
+        'Notion-Version': '2022-06-28',
+        'Content-Type': 'application/json',
+      };
+
+      // Create pages for each action item
+      const createdPages = [];
+      for (const item of analysis.actionItems) {
+        const pageData = {
+          parent: {
+            database_id: databaseId,
+          },
+          properties: {
+            Title: {
+              title: [
+                {
+                  text: {
+                    content: item.task,
+                  },
+                },
+              ],
+            },
+            Owner: {
+              rich_text: [
+                {
+                  text: {
+                    content: item.owner,
+                  },
+                },
+              ],
+            },
+            Deadline: {
+              date: item.deadline && item.deadline !== 'Not specified' ? { start: item.deadline } : null,
+            },
+            Priority: {
+              select: {
+                name: item.priority,
+              },
+            },
+            Status: {
+              select: {
+                name: item.status,
+              },
+            },
+            'Meeting': {
+              rich_text: [
+                {
+                  text: {
+                    content: meeting.title,
+                  },
+                },
+              ],
+            },
+          },
+        };
+
+        try {
+          const pageResponse = await axios.post(`${baseUrl}/pages`, pageData, { headers });
+          createdPages.push(pageResponse.data);
+        } catch (error) {
+          logger.error('Failed to create Notion page:', error.message);
+          if (error.response?.status === 404) {
+            throw ApiError.badRequest('Invalid Notion database ID or database access denied');
+          }
+          throw ApiError.internal(`Failed to create page: ${error.message}`);
+        }
+      }
+
+      logger.info(`Successfully exported ${createdPages.length} pages to Notion`);
+      return {
+        success: true,
+        message: `${createdPages.length} action items exported to Notion`,
+        pagesCreated: createdPages.length,
+        databaseId,
+      };
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      logger.error('Notion export error:', error);
+      throw ApiError.serviceUnavailable('Failed to export to Notion: ' + error.message);
+    }
   }
 }
 

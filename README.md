@@ -1,19 +1,26 @@
 # MeetingAI — AI Meeting Notes & Action Item Intelligence Platform
 
-A production-ready full-stack application for recording, analyzing, and managing meeting notes using AI-powered intelligence. Built with React, Node.js/Express, MongoDB, and OpenAI.
+A production-ready full-stack application for recording, analyzing, and managing meeting notes using AI-powered intelligence. Built with React, Node.js/Express, MongoDB, Claude API, and OpenAI.
 
 ---
 
 ## Features
 
-- **AI-Powered Analysis** — Automatically extract summaries, key points, and action items from raw meeting notes using OpenAI GPT (with regex fallback when no API key is configured)
+- **AI-Powered Analysis** — Automatically extract summaries, key points, and action items from meeting notes using Claude API or OpenAI GPT (with intelligent fallback)
+- **Dual AI Support** — Primary support for Claude API with automatic fallback to OpenAI if Claude is unavailable
 - **Action Item Tracking** — Centralized dashboard to manage all action items across meetings with filtering, priority, status, and ownership
+- **Advanced Search** — Full-text search across meeting titles, content, summaries, and action items
 - **Version History** — Every AI analysis is versioned; edit analyses with tracked change history
 - **Sharing** — Generate secure share links for read-only meeting views (no login required)
-- **Export** — Export meetings and analyses as PDF or JSON
+- **Multiple Export Formats** — Export meetings and analyses as:
+  - JSON (structured data export)
+  - PDF (professional reports)
+  - Trello (sync action items to Trello boards)
+  - Notion (sync action items to Notion databases)
 - **Authentication** — JWT-based auth with access + refresh token rotation
-- **Role-Based Access** — User and admin roles with authorization middleware
 - **Rate Limiting** — Configurable rate limiting for general, AI, and auth endpoints
+- **Meeting Organization** — Tags, types (standup, sprint-planning, client, academic, leadership), archiving
+
 ---
 
 ## Tech Stack
@@ -23,7 +30,8 @@ A production-ready full-stack application for recording, analyzing, and managing
 | Frontend | React 18, React Router 6, Tailwind CSS, Axios |
 | Backend | Node.js, Express.js, Mongoose ODM |
 | Database | MongoDB Atlas |
-| AI | OpenAI GPT-4 (configurable model) |
+| AI | Claude API (primary), OpenAI GPT-4 (fallback) |
+| Integrations | Trello API, Notion API |
 | Auth | JWT (access + refresh tokens), bcryptjs |
 | Testing | Jest, Supertest, mongodb-memory-server |
 | Logging | Winston (file + console transports) |
@@ -35,7 +43,8 @@ A production-ready full-stack application for recording, analyzing, and managing
 ### Prerequisites
 
 - Node.js 18+
-- OpenAI API key (optional — fallback analysis works without it)
+- MongoDB Atlas account or local MongoDB
+- Claude API key (recommended) or OpenAI API key for AI features
 
 ### Setup
 
@@ -43,7 +52,7 @@ A production-ready full-stack application for recording, analyzing, and managing
 # Backend
 cd backend
 cp .env.example .env
-# Edit .env with your configuration
+# Edit .env with your configuration (see SETUP_GUIDE.md for details)
 npm install
 npm run dev
 
@@ -55,65 +64,162 @@ npm start
 
 The frontend runs on `http://localhost:3000` and the backend on `http://localhost:5000`.
 
+**For detailed setup instructions, see [SETUP_GUIDE.md](SETUP_GUIDE.md)**
+
 ---
 
 ## Environment Variables
 
-### Backend (`backend/.env`)
+### Backend Configuration
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `PORT` | No | `5000` | Server port |
-| `MONGODB_URI` | No | MongoDB Atlas URI | MongoDB connection string |
-| `JWT_SECRET` | **Yes** | — | Access token signing secret (min 32 chars) |
-| `JWT_REFRESH_SECRET` | **Yes** | — | Refresh token signing secret (min 32 chars) |
-| `JWT_EXPIRE` | No | `15m` | Access token expiry |
-| `JWT_REFRESH_EXPIRE` | No | `7d` | Refresh token expiry |
-| `OPENAI_API_KEY` | No | — | OpenAI API key for AI analysis |
-| `OPENAI_MODEL` | No | `gpt-4` | OpenAI model to use |
-| `CORS_ORIGIN` | No | `http://localhost:3000` | Allowed CORS origins (comma-separated) |
-| `RATE_LIMIT_WINDOW_MS` | No | `900000` | Rate limit window (15 min) |
-| `RATE_LIMIT_MAX_REQUESTS` | No | `100` | Max requests per window |
-| `LOG_LEVEL` | No | `info` | Winston log level |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NODE_ENV` | No | `development` or `production` |
+| `PORT` | No | Server port (default: 5000) |
+| `MONGODB_URI` | Yes | MongoDB connection string |
+| `JWT_SECRET` | **Yes** | Access token signing secret (min 32 chars) |
+| `JWT_REFRESH_SECRET` | **Yes** | Refresh token signing secret (min 32 chars) |
+| `CLAUDE_API_KEY` | Recommended | Claude API key (primary AI provider) |
+| `OPENAI_API_KEY` | No | OpenAI API key (fallback AI provider) |
+| `TRELLO_API_KEY` | No | Trello integration API key |
+| `TRELLO_API_TOKEN` | No | Trello integration token |
+| `NOTION_API_KEY` | No | Notion integration API key |
+| `CORS_ORIGIN` | No | Allowed CORS origins (comma-separated) |
+| `RATE_LIMIT_MAX_REQUESTS` | No | Rate limit threshold (default: 100) |
+| `LOG_LEVEL` | No | Log level: `info`, `warn`, `error`, `debug` |
+
+---
+
+## API Overview
+
+### Authentication
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/auth/register` | `POST` | Register new user |
+| `/api/auth/login` | `POST` | Login with email/password |
+| `/api/auth/refresh` | `POST` | Refresh access token |
+| `/api/auth/logout` | `POST` | Logout |
+| `/api/auth/profile` | `GET` | Get current user profile |
+
+### Meetings Management
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/meetings` | `GET` | List meetings (paginated, filterable) |
+| `/api/meetings/search` | `GET` | Advanced search across meetings |
+| `/api/meetings` | `POST` | Create new meeting |
+| `/api/meetings/:id` | `GET` | Get meeting details |
+| `/api/meetings/:id` | `PUT` | Update meeting |
+| `/api/meetings/:id` | `DELETE` | Delete meeting |
+| `/api/meetings/:id/archive` | `PATCH` | Toggle archive status |
+| `/api/meetings/:id/share` | `PATCH` | Generate/revoke share link |
+
+### Analysis & AI
+| Endpoint | Method | Description |
+| | `POST` | Generate AI analysis for meeting |
+| `/api/analyses/meetings/:meetingId/latest` | `GET` | Get latest analysis |
+| `/api/analyses/meetings/:meetingId/versions` | `GET` | List all analysis versions |
+| `/api/analyses/:id` | `PUT` | Update analysis |
+| `/api/analyses/:id/confirm` | `PATCH` | Confirm analysis changes |
+
+### Action Items
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/action-items` | `GET` | List all action items |
+| `/api/action-items/stats` | `GET` | Get action item statistics |
+| `/api/action-items/:analysisId/:actionItemId` | `PATCH` | Update action item |
+
+### Exports & Integrations
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/export/meetings/:id/json` | `GET` | Export as JSON |
+| `/api/export/meetings/:id/pdf` | `GET` | Export as PDF |
+| `/api/export/meetings/:id/trello` | `POST` | Export to Trello board |
+| `/api/export/meetings/:id/notion` | `POST` | Export to Notion database |
+
+### Public Endpoints
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/shared/:shareToken` | `GET` | Get shared meeting (no auth required) |
+| `/api/health` | `GET` | Health check endpoint |
+
+---
+
+## Advanced Features
+
+### Meeting Search
+Search across all meetings with a single query:
+```bash
+GET /api/meetings/search?q=budget&page=1&limit=20&archived=false
+```
+
+Searches in:
+- Meeting titles
+- Meeting content
+- Analysis summaries
+- Key points
+- Action item descriptions and owners
+
+### Export to Trello
+Send action items directly to Trello:
+```bash
+POST /api/export/meetings/:id/trello
+{
+  "boardId": "trello-board-id",
+  "listId": "trello-list-id"
+}
+```
+
+### Export to Notion
+Sync action items to Notion databases:
+```bash
+POST /api/export/meetings/:id/notion
+{
+  "databaseId": "notion-database-id"
+}
+```
 
 ---
 
 ## Project Structure
 
 ```
-AI meeting/
-├── .env.example                # Environment template
+ai-meeting-platform/
+├── README.md                   # This file
+├── SETUP_GUIDE.md             # Detailed setup instructions
+├── .env.example               # Environment template
 ├── backend/
 │   ├── package.json
 │   ├── src/
-│   │   ├── server.js           # Express app & startup
-│   │   ├── config/             # env, database, cors
-│   │   ├── models/             # Mongoose schemas (User, Meeting, Analysis)
-│   │   ├── routes/             # Express route definitions
-│   │   ├── controllers/        # Request handlers
-│   │   ├── services/           # Business logic (auth, AI, meeting, export)
-│   │   ├── middleware/         # auth, rateLimiter, validate, errorHandler
-│   │   ├── validators/        # Joi validation schemas
-│   │   └── utils/             # logger, apiError, schemaValidator
+│   │   ├── server.js          # Express app & startup
+│   │   ├── config/            # env, database, cors
+│   │   ├── models/            # Mongoose schemas
+│   │   ├── routes/            # API route definitions
+│   │   ├── controllers/       # Request handlers
+│   │   ├── services/          # Business logic & AI
+│   │   ├── middleware/        # Auth, rate limiting, error handling
+│   │   ├── validators/        # Input validation schemas
+│   │   └── utils/             # Utilities & helpers
 │   └── tests/
-│       ├── setup.js            # Jest config with MongoMemoryServer
-│       ├── unit/               # Unit tests
-│       └── integration/        # API integration tests
+│       ├── unit/              # Unit tests
+│       └── integration/       # API integration tests
 ├── frontend/
 │   ├── package.json
 │   └── src/
-│       ├── App.jsx             # React Router setup
-│       ├── index.js            # Entry point
-│       ├── api/client.js       # Axios instance with interceptors
-│       ├── context/            # AuthContext with token management
-│       ├── components/         # Reusable UI components
-│       ├── pages/              # Route pages
-│       └── utils/              # Constants and helpers
+│       ├── components/        # Reusable UI components
+│       ├── pages/             # Route pages
+│       ├── api/client.js      # API client with interceptors
+│       ├── context/           # React context (Auth)
+│       └── utils/             # Constants & helpers
+├── claude-api-service/        # Options Python wrapper
+│   ├── main.py
+│   ├── ai_service.py
+│   ├── schemas.py
+│   └── requirements.txt
 └── docs/
-    ├── architecture.md
-    ├── api-reference.md
-    ├── database-schema.md
-    └── setup-guide.md
+    ├── api-reference.md       # Complete API docs
+    ├── architecture.md        # System architecture
+    ├── database-schema.md     # MongoDB schema
+    └── setup-guide.md         # Deployment guide
 ```
 
 ---
@@ -126,49 +232,58 @@ cd backend
 # Run all tests
 npm test
 
-# Unit tests only
+# Run specific test suite
 npm run test:unit
-
-# Integration tests only
 npm run test:integration
-```
 
-Tests use `mongodb-memory-server` for an isolated in-memory database — no external MongoDB required.
+# Run with coverage report
+npm test -- --coverage
+```
 
 ---
 
-## API Overview
+## Troubleshooting
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/auth/register` | Register new user |
-| `POST` | `/api/auth/login` | Login |
-| `POST` | `/api/auth/refresh` | Refresh access token |
-| `POST` | `/api/auth/logout` | Logout |
-| `GET` | `/api/auth/profile` | Get current user |
-| `GET` | `/api/meetings` | List meetings (paginated, filterable) |
-| `POST` | `/api/meetings` | Create meeting |
-| `GET` | `/api/meetings/:id` | Get meeting |
-| `PUT` | `/api/meetings/:id` | Update meeting |
-| `DELETE` | `/api/meetings/:id` | Delete meeting |
-| `POST` | `/api/meetings/:id/share` | Toggle sharing |
-| `POST` | `/api/meetings/:id/archive` | Toggle archive |
-| `POST` | `/api/analyses/meetings/:meetingId/generate` | Generate AI analysis |
-| `GET` | `/api/analyses/meetings/:meetingId/latest` | Get latest analysis |
-| `GET` | `/api/analyses/meetings/:meetingId/versions` | List all versions |
-| `PUT` | `/api/analyses/:id` | Update analysis |
-| `POST` | `/api/analyses/:id/confirm` | Confirm analysis |
-| `GET` | `/api/action-items` | List all action items |
-| `GET` | `/api/action-items/stats` | Action item statistics |
-| `PUT` | `/api/action-items/:analysisId/:actionItemId` | Update action item |
-| `GET` | `/api/export/meetings/:id/json` | Export as JSON |
-| `GET` | `/api/export/meetings/:id/pdf` | Export as PDF |
-| `GET` | `/api/shared/:shareToken` | Get shared meeting (public) |
+See [SETUP_GUIDE.md](SETUP_GUIDE.md#troubleshooting) for detailed troubleshooting steps.
 
-See [docs/api-reference.md](docs/api-reference.md) for complete API documentation.
+**Common issues:**
+- Missing API keys → Check `.env` file setup
+- MongoDB connection errors → Verify `MONGODB_URI` format
+- CORS errors → Ensure `CORS_ORIGIN` includes your frontend URL
+- Port already in use → Change `PORT` or kill existing process
+
+---
+
+## Documentation
+
+- **[SETUP_GUIDE.md](SETUP_GUIDE.md)** — Complete setup and deployment guide
+- **[docs/api-reference.md](docs/api-reference.md)** — Full API documentation
+- **[docs/architecture.md](docs/architecture.md)** — System architecture
+- **[docs/database-schema.md](docs/database-schema.md)** — Database schema
+- **[PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md)** — Project analysis and fixes applied
+
+---
+
+## Key Improvements
+
+This version includes the following enhancements:
+
+✅ **Integrated Claude API** - Automatic Claude API support with OpenAI fallback  
+✅ **Removed hardcoded credentials** - All sensitive data moved to environment variables  
+✅ **Advanced search** - Full-text search across meetings and analyses  
+✅ **Trello integration** - Export action items to Trello boards  
+✅ **Notion integration** - Export action items to Notion databases  
+✅ **Improved error handling** - Better error messages and API responses  
+✅ **Enhanced frontend client** - Support for new export endpoints
+
+---
+
+## Support
+
+For issues, questions, or feature requests, please check the documentation or open an issue.
 
 ---
 
 ## License
 
-MIT
+MIT License - See LICENSE file for details

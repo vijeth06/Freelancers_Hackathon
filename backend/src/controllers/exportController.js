@@ -30,6 +30,59 @@ class ExportController {
       next(error);
     }
   }
+
+  /**
+   * Export action items to Trello board
+   * Body: { boardId: string, listId?: string }
+   */
+  async exportToTrello(req, res, next) {
+    try {
+      const { boardId, listId } = req.body;
+      
+      if (!boardId) {
+        throw ApiError.badRequest('Board ID is required');
+      }
+
+      const result = await exportService.exportToTrello(req.params.meetingId, req.userId, {
+        boardId,
+        listId,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: result,
+        message: result.message,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Export action items to Notion database
+   * Body: { databaseId: string }
+   */
+  async exportToNotion(req, res, next) {
+    try {
+      const { databaseId } = req.body;
+      
+      if (!databaseId) {
+        throw ApiError.badRequest('Database ID is required');
+      }
+
+      const result = await exportService.exportToNotion(req.params.meetingId, req.userId, {
+        databaseId,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: result,
+        message: result.message,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new ExportController();

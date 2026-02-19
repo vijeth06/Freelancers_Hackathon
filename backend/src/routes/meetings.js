@@ -18,6 +18,11 @@ router.post(
 );
 
 router.get(
+  '/search',
+  meetingController.search.bind(meetingController)
+);
+
+router.get(
   '/',
   validate(listMeetingsSchema, 'query'),
   meetingController.list.bind(meetingController)

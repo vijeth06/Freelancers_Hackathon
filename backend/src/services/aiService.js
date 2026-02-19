@@ -1,4 +1,5 @@
 const OpenAI = require('openai');
+const Anthropic = require('@anthropic-ai/sdk');
 const { env } = require('../config/env');
 const { validateAnalysisOutput, sanitizeAnalysisOutput } = require('../utils/schemaValidator');
 const ApiError = require('../utils/apiError');
@@ -6,16 +7,45 @@ const logger = require('../utils/logger');
 
 class AIService {
   constructor() {
-    this.client = null;
-    this.initClient();
+    this.openaiClient = null;
+    this.claudeClient = null;
+    this.aiProvider = null;
+    this.initClients();
   }
 
-  initClient() {
+  /**
+   * Initialize AI clients - prefer Claude, fallback to OpenAI
+   * If neither is available, will use regex-based fallback
+   */
+  initClients() {
+    // Initialize Claude API (if available)
+    if (env.CLAUDE_API_KEY && env.CLAUDE_API_KEY !== 'sk-ant-your-claude-api-key-here') {
+      try {
+        this.claudeClient = new Anthropic({ apiKey: env.CLAUDE_API_KEY });
+        this.aiProvider = 'claude';
+        logger.info('✅ Claude API client initialized (primary AI provider)');
+      } catch (error) {
+        logger.error('Failed to initialize Claude client:', error);
+      }
+    }
+
+    // Initialize OpenAI API (fallback)
     if (env.OPENAI_API_KEY && env.OPENAI_API_KEY !== 'sk-your-openai-api-key-here') {
-      this.client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-      logger.info('OpenAI client initialized');
-    } else {
-      logger.warn('OpenAI API key not configured. AI analysis will use fallback processing.');
+      try {
+        this.openaiClient = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+        if (!this.aiProvider) {
+          this.aiProvider = 'openai';
+          logger.info('✅ OpenAI client initialized (fallback AI provider)');
+        } else {
+          logger.info('✅ OpenAI client initialized (available as fallback)');
+        }
+      } catch (error) {
+        logger.error('Failed to initialize OpenAI client:', error);
+      }
+    }
+
+    if (!this.aiProvider) {
+      logger.warn('⚠️  No AI API key configured (CLAUDE_API_KEY or OPENAI_API_KEY). Using regex-based fallback analysis.');
     }
   }
 
@@ -68,17 +98,98 @@ Respond ONLY with valid JSON. No explanations, no markdown formatting, no code b
   }
 
   async analyzeMeeting(rawContent, meetingType = 'general') {
-    if (this.client) {
+    if (this.aiProvider === 'claude') {
+      return this.analyzeWithClaude(rawContent, meetingType);
+    }
+    if (this.aiProvider === 'openai') {
       return this.analyzeWithOpenAI(rawContent, meetingType);
     }
     return this.analyzeWithFallback(rawContent, meetingType);
+  }
+
+  /**
+   * Analyze meeting using Claude API (Anthropic)
+   */
+  async analyzeWithClaude(rawContent, meetingType) {
+    try {
+      const systemPrompt = this.buildSystemPrompt(meetingType);
+
+      const response = await this.claudeClient.messages.create({
+        model: env.CLAUDE_MODEL || 'claude-3-haiku-20240307',
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: [
+          {
+            role: 'user',
+            content: `Analyze the following meeting notes and extract structured information:\n\n${rawContent}`,
+          },
+        ],
+      });
+
+      const content = response.content[0].type === 'text' ? response.content[0].text : '';
+      if (!content) {
+        logger.error('Claude API returned empty response');
+        throw ApiError.internal('AI returned empty response');
+      }
+
+      let parsed;
+      try {
+        // Try to extract JSON from the response (it might have extra text)
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          throw new Error('No JSON object found in response');
+        }
+        parsed = JSON.parse(jsonMatch[0]);
+      } catch (parseError) {
+        logger.error('Failed to parse Claude response as JSON:', parseError);
+        throw ApiError.internal('AI returned invalid JSON response');
+      }
+
+      const sanitized = sanitizeAnalysisOutput(parsed);
+      const { valid, errors, value } = validateAnalysisOutput(sanitized);
+
+      if (!valid) {
+        logger.error('Claude output validation failed:', errors);
+        throw ApiError.internal('AI output failed schema validation');
+      }
+
+      return {
+        analysis: value,
+        metadata: {
+          model: env.CLAUDE_MODEL || 'claude-3-haiku-20240307',
+          provider: 'claude',
+          inputTokens: response.usage?.input_tokens,
+          outputTokens: response.usage?.output_tokens,
+        },
+      };
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+
+      logger.error('Claude API error:', error);
+
+      if (error.message?.includes('429') || error.message?.includes('rate_limit')) {
+        throw ApiError.tooManyRequests('AI service rate limit exceeded. Please try again later.');
+      }
+      if (error.message?.includes('401') || error.message?.includes('authentication')) {
+        throw ApiError.serviceUnavailable('AI service authentication failed');
+      }
+
+      // Fallback to OpenAI or regex analysis on Claude failure
+      if (this.openaiClient) {
+        logger.warn('Claude API failed, falling back to OpenAI');
+        return this.analyzeWithOpenAI(rawContent, meetingType);
+      }
+
+      logger.warn('Claude API failed, falling back to regex analysis');
+      return this.analyzeWithFallback(rawContent, meetingType);
+    }
   }
 
   async analyzeWithOpenAI(rawContent, meetingType) {
     try {
       const systemPrompt = this.buildSystemPrompt(meetingType);
 
-      const response = await this.client.chat.completions.create({
+      const response = await this.openaiClient.chat.completions.create({
         model: env.OPENAI_MODEL,
         messages: [
           { role: 'system', content: systemPrompt },
@@ -98,7 +209,7 @@ Respond ONLY with valid JSON. No explanations, no markdown formatting, no code b
       try {
         parsed = JSON.parse(content);
       } catch (parseError) {
-        logger.error('Failed to parse AI response as JSON:', parseError);
+        logger.error('Failed to parse OpenAI response as JSON:', parseError);
         throw ApiError.internal('AI returned invalid JSON response');
       }
 
@@ -106,7 +217,7 @@ Respond ONLY with valid JSON. No explanations, no markdown formatting, no code b
       const { valid, errors, value } = validateAnalysisOutput(sanitized);
 
       if (!valid) {
-        logger.error('AI output validation failed:', errors);
+        logger.error('OpenAI output validation failed:', errors);
         throw ApiError.internal('AI output failed schema validation');
       }
 
@@ -114,6 +225,7 @@ Respond ONLY with valid JSON. No explanations, no markdown formatting, no code b
         analysis: value,
         metadata: {
           model: env.OPENAI_MODEL,
+          provider: 'openai',
           promptTokens: response.usage?.prompt_tokens,
           completionTokens: response.usage?.completion_tokens,
         },
@@ -130,19 +242,20 @@ Respond ONLY with valid JSON. No explanations, no markdown formatting, no code b
         throw ApiError.serviceUnavailable('AI service authentication failed');
       }
 
-      throw ApiError.serviceUnavailable('AI analysis service is temporarily unavailable');
+      logger.warn('OpenAI API failed, falling back to regex analysis');
+      return this.analyzeWithFallback(rawContent, meetingType);
     }
   }
 
   analyzeWithFallback(rawContent, meetingType) {
-    logger.info('Using fallback analysis (no AI API key configured)');
+    logger.info('Using regex-based fallback analysis (no API key configured)');
 
     const lines = rawContent
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
 
-    const summary = `Meeting notes contain ${lines.length} line(s) of content. Type: ${meetingType}. Please configure an OpenAI API key for AI-powered analysis.`;
+    const summary = `Meeting notes contain ${lines.length} line(s) of content. Type: ${meetingType}. Please configure CLAUDE_API_KEY or OPENAI_API_KEY for AI-powered analysis.`;
 
     const keyPoints = [];
     const actionItems = [];
@@ -228,13 +341,13 @@ Respond ONLY with valid JSON. No explanations, no markdown formatting, no code b
           keyPoints: ['Meeting notes recorded'],
           actionItems: [],
         },
-        metadata: { model: 'fallback', promptTokens: 0, completionTokens: 0 },
+        metadata: { model: 'fallback', provider: 'regex', promptTokens: 0, completionTokens: 0 },
       };
     }
 
     return {
       analysis: value,
-      metadata: { model: 'fallback', promptTokens: 0, completionTokens: 0 },
+      metadata: { model: 'fallback', provider: 'regex', promptTokens: 0, completionTokens: 0 },
     };
   }
 }

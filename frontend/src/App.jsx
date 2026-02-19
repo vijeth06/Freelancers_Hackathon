@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
+import Home from './pages/Home';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
@@ -50,6 +51,16 @@ export default function App() {
       />
 
       <Routes>
+        {/* Landing page */}
+        <Route
+          path="/"
+          element={
+            <GuestRoute>
+              <Home />
+            </GuestRoute>
+          }
+        />
+
         {/* Public routes */}
         <Route
           path="/login"
@@ -103,17 +114,16 @@ export default function App() {
           }
         />
 
-        {/* Redirects */}
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        {/* 404 Page */}
         <Route
           path="*"
           element={
-            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+            <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
               <div className="text-center">
-                <h1 className="text-6xl font-bold text-gray-200">404</h1>
-                <p className="mt-4 text-lg text-gray-600">Page not found</p>
-                <a href="/dashboard" className="mt-6 inline-block text-primary-600 hover:text-primary-700 font-medium">
-                  Go to Dashboard &rarr;
+                <h1 className="text-6xl font-bold text-white">404</h1>
+                <p className="mt-4 text-lg text-purple-200">Page not found</p>
+                <a href="/dashboard" className="mt-6 inline-block px-6 py-3 text-purple-100 hover:text-white font-medium">
+                  ← Go to Dashboard
                 </a>
               </div>
             </div>

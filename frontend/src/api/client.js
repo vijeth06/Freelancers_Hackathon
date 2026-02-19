@@ -106,6 +106,7 @@ const api = {
   meetings: {
     create: (data) => apiClient.post('/meetings', data),
     list: (params) => apiClient.get('/meetings', { params }),
+    search: (query, params) => apiClient.get('/meetings/search', { params: { q: query, ...params } }),
     getById: (id) => apiClient.get(`/meetings/${id}`),
     update: (id, data) => apiClient.put(`/meetings/${id}`, data),
     delete: (id) => apiClient.delete(`/meetings/${id}`),
@@ -136,11 +137,33 @@ const api = {
       apiClient.get(`/export/meetings/${meetingId}/json`, { responseType: 'blob' }),
     pdf: (meetingId) =>
       apiClient.get(`/export/meetings/${meetingId}/pdf`, { responseType: 'blob' }),
+    trello: (meetingId, data) =>
+      apiClient.post(`/export/meetings/${meetingId}/trello`, data),
+    notion: (meetingId, data) =>
+      apiClient.post(`/export/meetings/${meetingId}/notion`, data),
   },
 
   shared: {
     get: (shareToken) => apiClient.get(`/shared/${shareToken}`),
   },
+};
+
+/**
+ * Utility function to handle API errors consistently
+ * @param {Error} error - The error from API call
+ * @returns {string} - Human-readable error message
+ */
+export const getErrorMessage = (error) => {
+  if (error.response?.data?.message) {
+    return error.response.data.message;
+  }
+  if (error.response?.data?.error) {
+    return error.response.data.error;
+  }
+  if (error.message) {
+    return error.message;
+  }
+  return 'An unexpected error occurred. Please try again.';
 };
 
 export default api;

@@ -62,10 +62,13 @@ class MeetingService {
 
     if (type) query.type = type;
     if (tag) query.tags = tag;
+    
+    // Enhanced search: search in title, tags, and can match rawContent
     if (search) {
       query.$or = [
         { title: { $regex: search, $options: 'i' } },
         { tags: { $regex: search, $options: 'i' } },
+        { rawContent: { $regex: search, $options: 'i' } },
       ];
     }
 
@@ -108,6 +111,90 @@ class MeetingService {
         limit,
         total,
         pages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  /**
+   * Advanced search across meetings and analyses
+   * Searches in titles, summaries, key points, and action items
+   */
+  async searchMeetings(userId, searchTerm, filters = {}) {
+    const { page = 1, limit = 20, archived = false } = filters;
+
+    if (!searchTerm || searchTerm.trim().length === 0) {
+      throw ApiError.badRequest('Search term is required');
+    }
+
+    const searchRegex = { $regex: searchTerm, $options: 'i' };
+
+    // Step 1: Find meetings matching the search term
+    const meetingQuery = {
+      userId,
+      isArchived: archived,
+      $or: [
+        { title: searchRegex },
+        { tags: searchRegex },
+        { rawContent: searchRegex },
+        { participants: searchRegex },
+      ],
+    };
+
+    // Step 2: Find analyses matching the search term
+    const analysisQuery = {
+      userId,
+      $or: [
+        { summary: searchRegex },
+        { keyPoints: searchRegex },
+        { 'actionItems.task': searchRegex },
+        { 'actionItems.owner': searchRegex },
+      ],
+    };
+
+    const [meetings, analyses] = await Promise.all([
+      Meeting.find(meetingQuery).sort({ createdAt: -1 }).lean(),
+      Analysis.find(analysisQuery).lean(),
+    ]);
+
+    // Combine results from both searches
+    const meetingIds = new Set([
+      ...meetings.map((m) => m._id.toString()),
+      ...analyses.map((a) => a.meetingId.toString()),
+    ]);
+
+    const combinedMeetings = await Meeting.find({
+      _id: { $in: Array.from(meetingIds) },
+      userId,
+      isArchived: archived,
+    })
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    // Get latest analyses for result enrichment
+    const analysisMap = {};
+    for (const analysis of analyses) {
+      const mid = analysis.meetingId.toString();
+      if (!analysisMap[mid] || analysis.version > analysisMap[mid].version) {
+        analysisMap[mid] = analysis;
+      }
+    }
+
+    const enrichedResults = combinedMeetings.map((m) => ({
+      ...m,
+      latestAnalysis: analysisMap[m._id.toString()] || null,
+      actionItemCount: analysisMap[m._id.toString()]?.actionItems?.length || 0,
+    }));
+
+    return {
+      results: enrichedResults,
+      total: meetingIds.size,
+      searchTerm,
+      pagination: {
+        page,
+        limit,
+        pages: Math.ceil(meetingIds.size / limit),
       },
     };
   }

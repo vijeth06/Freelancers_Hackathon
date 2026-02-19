@@ -49,6 +49,27 @@ class MeetingController {
     }
   }
 
+  /**
+   * Advanced search across meetings and analyses
+   * Query params: q (search term), page, limit, archived
+   */
+  async search(req, res, next) {
+    try {
+      const { q, page, limit, archived } = req.query;
+      const result = await meetingService.searchMeetings(req.userId, q, {
+        page: parseInt(page) || 1,
+        limit: parseInt(limit) || 20,
+        archived: archived === 'true',
+      });
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async update(req, res, next) {
     try {
       const meeting = await meetingService.updateMeeting(req.params.id, req.userId, req.body);
@@ -100,5 +121,4 @@ class MeetingController {
     }
   }
 }
-
 module.exports = new MeetingController();
