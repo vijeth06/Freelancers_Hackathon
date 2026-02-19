@@ -2,12 +2,24 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
+import logging
 
 from schemas import AnalyzeRequest, AnalyzeResponse
 from ai_service import analyze_meeting_transcript
 
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Load environment variables from .env file
 load_dotenv()
+
+# Validate required environment variables at startup
+required_env_vars = ['CLAUDE_API_KEY']
+for var in required_env_vars:
+    if not os.getenv(var):
+        logger.error(f"Missing required environment variable: {var}")
+        raise RuntimeError(f"Missing required environment variable: {var}")
 
 app = FastAPI(
     title="Claude Meeting Analysis API",
@@ -15,13 +27,16 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS
+# Configure CORS - restrict to known origins
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
+logger.info(f"CORS allowed origins: {allowed_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify allowed origins
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 
@@ -55,14 +70,16 @@ async def analyze(request: AnalyzeRequest):
         return result
         
     except ValueError as e:
+        logger.warning(f"Validation error: {str(e)}")
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid transcript or API error: {str(e)}"
+            detail=f"Invalid request: {str(e)}"
         )
     except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Error analyzing transcript: {str(e)}"
+            detail="Error analyzing transcript"
         )
 
 
@@ -70,9 +87,13 @@ if __name__ == "__main__":
     import uvicorn
     
     port = int(os.getenv("PORT", 8000))
+    env = os.getenv("ENV", "development")
+    logger.info(f"Starting Claude Meeting Analysis API on port {port} in {env} mode")
+    
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=port,
-        reload=True
+        reload=(env == "development"),
+        log_level="info"
     )
